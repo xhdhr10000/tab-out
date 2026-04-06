@@ -11,22 +11,40 @@
 // configured via ~/.mission-control/config.json.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const OpenAI  = require('openai');
-const crypto  = require('crypto');
-const config  = require('./config');
-const { readRecentHistory }            = require('./history-reader');
-const { filterUrls, deduplicateUrls }  = require('./url-filter');
+const OpenAI = require("openai");
+const crypto = require("crypto");
+const config = require("./config");
+const { readRecentHistory } = require("./history-reader");
+const { filterUrls, deduplicateUrls } = require("./url-filter");
 const {
-  db, clearAllMissions, upsertMission, insertMissionUrl, setMeta,
-} = require('./db');
+  db,
+  clearAllMissions,
+  upsertMission,
+  insertMissionUrl,
+  setMeta,
+} = require("./db");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LLM Client
 // ─────────────────────────────────────────────────────────────────────────────
 
 function getClient() {
+  // If the API key is empty, the user probably added it to config.json after
+  // the server started (e.g. during first-time setup). Try re-reading the
+  // file before giving up — this avoids a confusing 401 error.
+  if (!config.apiKey) {
+    config.reloadFromDisk();
+  }
+
+  if (!config.apiKey) {
+    throw new Error(
+      "No API key configured. Add your key to ~/.mission-control/config.json " +
+        '(set the "apiKey" field) and try again — no restart needed.',
+    );
+  }
+
   return new OpenAI({
-    apiKey:  config.apiKey,
+    apiKey: config.apiKey,
     baseURL: config.baseUrl,
   });
 }
@@ -35,22 +53,23 @@ function getClient() {
 async function callLLM(prompt, maxTokens = 4000) {
   const client = getClient();
   const completion = await client.chat.completions.create({
-    model:       config.model,
+    model: config.model,
     temperature: 0.3,
-    max_tokens:  maxTokens,
-    messages:    [{ role: 'user', content: prompt }],
+    max_tokens: maxTokens,
+    messages: [{ role: "user", content: prompt }],
   });
 
   const text = completion.choices?.[0]?.message?.content;
-  if (!text) throw new Error('LLM returned an empty response');
+  if (!text) throw new Error("LLM returned an empty response");
   return text;
 }
 
 // Parse JSON from LLM response (strips markdown fences if present)
 function parseJSON(text) {
-  let cleaned = text.trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/, '')
+  let cleaned = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "")
     .trim();
   return JSON.parse(cleaned);
 }
@@ -73,7 +92,7 @@ const GRANULARITY_RULES = `
 function getUserRules() {
   return config.customPromptRules
     ? `\nAdditional rules from the user:\n${config.customPromptRules}\n`
-    : '';
+    : "";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -85,14 +104,16 @@ function getUserRules() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function buildHistoryPrompt(entries) {
-  const entryLines = entries.map((entry, i) => {
-    const n     = i + 1;
-    const title = entry.title || '(no title)';
-    const url   = entry.url;
-    const visits = entry.visit_count || 1;
-    const last   = entry.last_visit  || 'unknown';
-    return `${n}. [${title}] ${url} (visited ${visits}x, last: ${last})`;
-  }).join('\n');
+  const entryLines = entries
+    .map((entry, i) => {
+      const n = i + 1;
+      const title = entry.title || "(no title)";
+      const url = entry.url;
+      const visits = entry.visit_count || 1;
+      const last = entry.last_visit || "unknown";
+      return `${n}. [${title}] ${url} (visited ${visits}x, last: ${last})`;
+    })
+    .join("\n");
 
   return `You are an AI assistant that analyzes browsing history and groups URLs into meaningful "missions."
 
@@ -131,46 +152,59 @@ function parseHistoryResponse(responseText, entries) {
   }
 
   const now = new Date().toISOString();
-  const validStatuses = ['active', 'cooling', 'abandoned'];
+  const validStatuses = ["active", "cooling", "abandoned"];
 
-  return parsed.missions.map(mission => {
-    const nameKey   = (mission.name || '').toLowerCase().trim();
-    const missionId = crypto.createHash('md5').update(nameKey).digest('hex').slice(0, 12);
+  return parsed.missions.map((mission) => {
+    const nameKey = (mission.name || "").toLowerCase().trim();
+    const missionId = crypto
+      .createHash("md5")
+      .update(nameKey)
+      .digest("hex")
+      .slice(0, 12);
 
-    const urlIndices  = Array.isArray(mission.url_indices) ? mission.url_indices : [];
-    const resolvedUrls = urlIndices.map(idx => entries[idx - 1]).filter(Boolean);
+    const urlIndices = Array.isArray(mission.url_indices)
+      ? mission.url_indices
+      : [];
+    const resolvedUrls = urlIndices
+      .map((idx) => entries[idx - 1])
+      .filter(Boolean);
 
     let lastActivity = null;
     if (resolvedUrls.length > 0) {
-      const mostRecent = resolvedUrls.reduce((best, e) =>
-        (e.last_visit_raw || 0) > (best.last_visit_raw || 0) ? e : best, resolvedUrls[0]);
+      const mostRecent = resolvedUrls.reduce(
+        (best, e) =>
+          (e.last_visit_raw || 0) > (best.last_visit_raw || 0) ? e : best,
+        resolvedUrls[0],
+      );
       lastActivity = mostRecent.last_visit || null;
     }
 
     return {
-      id:            missionId,
-      name:          mission.name    || 'Unnamed Mission',
-      summary:       mission.summary || '',
-      status:        validStatuses.includes(mission.status) ? mission.status : 'cooling',
+      id: missionId,
+      name: mission.name || "Unnamed Mission",
+      summary: mission.summary || "",
+      status: validStatuses.includes(mission.status)
+        ? mission.status
+        : "cooling",
       last_activity: lastActivity,
-      created_at:    now,
-      updated_at:    now,
-      dismissed:     0,
-      urls:          resolvedUrls,
+      created_at: now,
+      updated_at: now,
+      dismissed: 0,
+      urls: resolvedUrls,
     };
   });
 }
 
 async function analyzeBrowsingHistory() {
-  console.log('[clustering] Starting browsing history analysis...');
+  console.log("[clustering] Starting browsing history analysis...");
 
   const rawEntries = readRecentHistory();
   console.log(`[clustering] Raw entries: ${rawEntries.length}`);
   if (rawEntries.length === 0) return [];
 
-  const filtered     = filterUrls(rawEntries);
+  const filtered = filterUrls(rawEntries);
   const deduplicated = deduplicateUrls(filtered);
-  const batch        = deduplicated.slice(0, config.batchSize);
+  const batch = deduplicated.slice(0, config.batchSize);
   console.log(`[clustering] Sending ${batch.length} entries to LLM...`);
 
   const responseText = await callLLM(buildHistoryPrompt(batch));
@@ -184,22 +218,29 @@ async function analyzeBrowsingHistory() {
     clearAllMissions();
     for (const mission of missions) {
       upsertMission.run({
-        id: mission.id, name: mission.name, summary: mission.summary,
-        status: mission.status, last_activity: mission.last_activity,
-        created_at: mission.created_at, updated_at: mission.updated_at,
+        id: mission.id,
+        name: mission.name,
+        summary: mission.summary,
+        status: mission.status,
+        last_activity: mission.last_activity,
+        created_at: mission.created_at,
+        updated_at: mission.updated_at,
         dismissed: mission.dismissed,
       });
       for (const u of mission.urls) {
         insertMissionUrl.run({
-          mission_id: mission.id, url: u.url, title: u.title || '',
-          visit_count: u.visit_count || 1, last_visit: u.last_visit || null,
+          mission_id: mission.id,
+          url: u.url,
+          title: u.title || "",
+          visit_count: u.visit_count || 1,
+          last_visit: u.last_visit || null,
         });
       }
     }
   });
   insertAll();
 
-  setMeta.run({ key: 'last_analysis', value: new Date().toISOString() });
+  setMeta.run({ key: "last_analysis", value: new Date().toISOString() });
   console.log(`[clustering] Saved ${missions.length} missions to database`);
   return missions;
 }
@@ -212,9 +253,11 @@ async function analyzeBrowsingHistory() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function buildOpenTabsPrompt(tabs) {
-  const tabLines = tabs.map((tab, i) => {
-    return `${i + 1}. [${tab.title || '(no title)'}] ${tab.url || ''}`;
-  }).join('\n');
+  const tabLines = tabs
+    .map((tab, i) => {
+      return `${i + 1}. [${tab.title || "(no title)"}] ${tab.url || ""}`;
+    })
+    .join("\n");
 
   return `You are an AI assistant that organizes currently open browser tabs into meaningful "missions."
 
@@ -258,13 +301,15 @@ function parseOpenTabsResponse(responseText, tabs) {
 
   const personalMessage = parsed.personalMessage || null;
 
-  const missions = parsed.missions.map(mission => {
-    const tabIndices   = Array.isArray(mission.tab_indices) ? mission.tab_indices : [];
-    const resolvedTabs = tabIndices.map(idx => tabs[idx - 1]).filter(Boolean);
+  const missions = parsed.missions.map((mission) => {
+    const tabIndices = Array.isArray(mission.tab_indices)
+      ? mission.tab_indices
+      : [];
+    const resolvedTabs = tabIndices.map((idx) => tabs[idx - 1]).filter(Boolean);
     return {
-      name:    mission.name    || 'Unnamed Mission',
-      summary: mission.summary || '',
-      tabs:    resolvedTabs,
+      name: mission.name || "Unnamed Mission",
+      summary: mission.summary || "",
+      tabs: resolvedTabs,
     };
   });
 
@@ -272,14 +317,18 @@ function parseOpenTabsResponse(responseText, tabs) {
 }
 
 async function clusterOpenTabs(tabs) {
-  if (!tabs || tabs.length === 0) return { missions: [], personalMessage: null };
+  if (!tabs || tabs.length === 0)
+    return { missions: [], personalMessage: null };
 
   console.log(`[clustering] Clustering ${tabs.length} open tabs...`);
 
   const responseText = await callLLM(buildOpenTabsPrompt(tabs), 3000);
   console.log(`[clustering] LLM responded (${responseText.length} chars)`);
 
-  const { missions, personalMessage } = parseOpenTabsResponse(responseText, tabs);
+  const { missions, personalMessage } = parseOpenTabsResponse(
+    responseText,
+    tabs,
+  );
   console.log(`[clustering] Got ${missions.length} missions`);
 
   return { missions, personalMessage };

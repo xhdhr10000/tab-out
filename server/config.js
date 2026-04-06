@@ -11,14 +11,14 @@
 // without touching the source code at all.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const fs   = require('fs');
-const path = require('path');
-const os   = require('os');
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
 
 // The folder where all Mission Control data lives on your Mac.
 // os.homedir() gives us your home directory (e.g. /Users/zara)
-const CONFIG_DIR  = path.join(os.homedir(), '.mission-control');
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+const CONFIG_DIR = path.join(os.homedir(), ".mission-control");
+const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 
 // Default values — used whenever a key is absent from the config file.
 const DEFAULTS = {
@@ -40,7 +40,7 @@ const DEFAULTS = {
   // DeepSeek is recommended for cost (fractions of a cent per call).
 
   // Your API key — required for cloud providers, optional for local (Ollama)
-  apiKey: '',
+  apiKey: "",
 
   // The base URL for your LLM provider's API
   // Examples:
@@ -50,11 +50,11 @@ const DEFAULTS = {
   //   Together:    https://api.together.xyz/v1
   //   OpenRouter:  https://openrouter.ai/api/v1
   //   Ollama:      http://localhost:11434/v1
-  baseUrl: 'https://api.deepseek.com',
+  baseUrl: "https://api.deepseek.com",
 
   // Which model to use for clustering
   // Examples: deepseek-chat, gpt-4o-mini, llama-3.1-8b-instant, etc.
-  model: 'deepseek-chat',
+  model: "deepseek-chat",
 
   // ── Legacy field names (still supported for backward compatibility) ──
   // deepseekApiKey, deepseekBaseUrl, deepseekModel are mapped to the new names
@@ -65,7 +65,7 @@ const DEFAULTS = {
   //   "Always group my Google Docs tabs by project name, not by domain."
   //   "Treat all social media as one mission called 'Doom Scrolling'."
   //   "If I have tabs from the same GitHub repo, group them together."
-  customPromptRules: '',
+  customPromptRules: "",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -80,24 +80,31 @@ function loadConfig() {
 
   if (fs.existsSync(CONFIG_FILE)) {
     try {
-      const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
+      const raw = fs.readFileSync(CONFIG_FILE, "utf8");
       fileConfig = JSON.parse(raw);
     } catch (err) {
       // If the file is malformed JSON, warn but don't crash — just use defaults.
-      console.warn(`[config] Warning: could not parse ${CONFIG_FILE}: ${err.message}`);
-      console.warn('[config] Falling back to defaults.');
+      console.warn(
+        `[config] Warning: could not parse ${CONFIG_FILE}: ${err.message}`,
+      );
+      console.warn("[config] Falling back to defaults.");
     }
   } else {
-    console.warn(`[config] No config file found at ${CONFIG_FILE}. Using defaults.`);
+    console.warn(
+      `[config] No config file found at ${CONFIG_FILE}. Using defaults.`,
+    );
   }
 
   // Merge: defaults first, then file values on top.
   const merged = Object.assign({}, DEFAULTS, fileConfig);
 
   // Backward compatibility: map old deepseek-specific field names to new generic ones
-  if (fileConfig.deepseekApiKey && !fileConfig.apiKey) merged.apiKey = fileConfig.deepseekApiKey;
-  if (fileConfig.deepseekBaseUrl && !fileConfig.baseUrl) merged.baseUrl = fileConfig.deepseekBaseUrl;
-  if (fileConfig.deepseekModel && !fileConfig.model) merged.model = fileConfig.deepseekModel;
+  if (fileConfig.deepseekApiKey && !fileConfig.apiKey)
+    merged.apiKey = fileConfig.deepseekApiKey;
+  if (fileConfig.deepseekBaseUrl && !fileConfig.baseUrl)
+    merged.baseUrl = fileConfig.deepseekBaseUrl;
+  if (fileConfig.deepseekModel && !fileConfig.model)
+    merged.model = fileConfig.deepseekModel;
 
   return merged;
 }
@@ -106,13 +113,44 @@ function loadConfig() {
 // can reference them (e.g. install.js needs CONFIG_DIR and CONFIG_FILE).
 const config = loadConfig();
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Hot-reload: re-read config.json from disk and update in place.
+//
+// Why this exists: the install script starts the server (via Launch Agent)
+// *before* the user has added their API key. Without hot-reload, the server
+// would run with an empty apiKey until manually restarted. This function
+// lets clustering.js say "hey, my key is empty — maybe the user added it
+// to the file after I started. Let me check." It re-reads the file and
+// patches the existing config object so every module sees the update.
+// ─────────────────────────────────────────────────────────────────────────────
+function reloadFromDisk() {
+  if (!fs.existsSync(CONFIG_FILE)) return;
+
+  try {
+    const raw = fs.readFileSync(CONFIG_FILE, "utf8");
+    const fileConfig = JSON.parse(raw);
+
+    // Patch every key from the file onto the live config object.
+    // We skip our internal properties (CONFIG_DIR, CONFIG_FILE, etc.)
+    for (const [key, value] of Object.entries(fileConfig)) {
+      config[key] = value;
+    }
+
+    console.log("[config] Reloaded config from disk");
+  } catch (err) {
+    console.warn(`[config] Hot-reload failed: ${err.message}`);
+  }
+}
+
 // Export the config object directly so other modules can do:
 //   const config = require('./config');
 //   console.log(config.port);
 // Also attach the paths as properties for modules that need them (e.g. install.js)
-config.CONFIG_DIR  = CONFIG_DIR;
+config.CONFIG_DIR = CONFIG_DIR;
 config.CONFIG_FILE = CONFIG_FILE;
 // Also export DEFAULTS so install.js can write a proper starter config file
-config.DEFAULTS    = DEFAULTS;
+config.DEFAULTS = DEFAULTS;
+// Expose reloadFromDisk so other modules can trigger a hot-reload
+config.reloadFromDisk = reloadFromDisk;
 
 module.exports = config;
