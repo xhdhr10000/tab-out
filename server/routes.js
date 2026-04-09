@@ -32,6 +32,13 @@ const {
   archiveMission,
   getMeta,
   db,
+  getDeferredActive,
+  getDeferredArchived,
+  insertDeferred,
+  checkDeferred,
+  dismissDeferred,
+  ageOutDeferred,
+  searchDeferredArchived,
 } = require('./db');
 
 // Pull in the AI clustering functions
@@ -643,6 +650,118 @@ router.post('/update', (req, res) => {
       });
     });
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/defer
+//
+// Save one or more tabs for later. The browser closes them; we store them here
+// so they appear in the "Saved for Later" checklist on the dashboard.
+//
+// Expects: { tabs: [{ url, title, favicon_url?, source_mission? }] }
+// Returns: { success: true, deferred: [{ id, url, title, ... }] }
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/defer', (req, res) => {
+  try {
+    const { tabs } = req.body;
+    if (!tabs || !Array.isArray(tabs) || tabs.length === 0) {
+      return res.status(400).json({ error: 'tabs array is required' });
+    }
+
+    const created = [];
+    for (const tab of tabs) {
+      if (!tab.url || !tab.title) continue; // skip incomplete entries
+      const result = insertDeferred.run({
+        url: tab.url,
+        title: tab.title,
+        favicon_url: tab.favicon_url || null,
+        source_mission: tab.source_mission || null,
+      });
+      created.push({
+        id: result.lastInsertRowid,
+        url: tab.url,
+        title: tab.title,
+        favicon_url: tab.favicon_url || null,
+        source_mission: tab.source_mission || null,
+        deferred_at: new Date().toISOString(),
+      });
+    }
+
+    res.json({ success: true, deferred: created });
+  } catch (err) {
+    console.error('[TMC] Error deferring tabs:', err);
+    res.status(500).json({ error: 'Failed to defer tabs' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/deferred
+//
+// Returns both active and archived deferred tabs. Also runs the 30-day
+// age-out check — any deferred tab older than 30 days gets auto-archived.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/deferred', (req, res) => {
+  try {
+    // Auto-archive anything older than 30 days
+    ageOutDeferred.run();
+
+    const active = getDeferredActive.all();
+    const archived = getDeferredArchived.all();
+
+    res.json({ active, archived });
+  } catch (err) {
+    console.error('[TMC] Error fetching deferred tabs:', err);
+    res.status(500).json({ error: 'Failed to fetch deferred tabs' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/deferred/search?q=query
+//
+// Search archived deferred tabs by title or URL. Returns up to 50 matches.
+//
+// IMPORTANT: This route MUST come before PATCH /deferred/:id. Express matches
+// routes in order — if the PATCH came first, "search" would be treated as the
+// :id parameter and this endpoint would never be reached.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/deferred/search', (req, res) => {
+  try {
+    const q = req.query.q || '';
+    if (q.length < 2) {
+      return res.json({ results: [] });
+    }
+    const results = searchDeferredArchived.all({ q });
+    res.json({ results });
+  } catch (err) {
+    console.error('[TMC] Error searching deferred tabs:', err);
+    res.status(500).json({ error: 'Failed to search deferred tabs' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH /api/deferred/:id
+//
+// Update a deferred tab — either check it off or dismiss it.
+// Expects: { checked: true } or { dismissed: true }
+// ─────────────────────────────────────────────────────────────────────────────
+router.patch('/deferred/:id', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid ID' });
+
+    if (req.body.checked) {
+      checkDeferred.run({ id });
+    } else if (req.body.dismissed) {
+      dismissDeferred.run({ id });
+    } else {
+      return res.status(400).json({ error: 'Must provide checked or dismissed' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[TMC] Error updating deferred tab:', err);
+    res.status(500).json({ error: 'Failed to update deferred tab' });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
