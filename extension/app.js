@@ -45,9 +45,13 @@ async function fetchOpenTabs() {
       title:    t.title,
       windowId: t.windowId,
       active:   t.active,
+      favIconUrl: t.favIconUrl || '',
       // Flag Tab Out's own pages so we can detect duplicate new tabs
       isTabOut: t.url === newtabUrl || t.url === 'chrome://newtab/',
     }));
+
+    // Cache favicons locally so we never need to call Google
+    await cacheFavicons(openTabs);
   } catch {
     // chrome.tabs API unavailable (shouldn't happen in an extension page)
     openTabs = [];
@@ -627,6 +631,72 @@ function escapeHTML(str) {
     .replace(/'/g, '&#039;');
 }
 
+/* ----------------------------------------------------------------
+   FAVICON LOCAL CACHE
+   Stores favicons as base64 data URLs in chrome.storage.local
+   so we never need to call Google's favicon service.
+   ---------------------------------------------------------------- */
+
+let _faviconCache = null;
+
+async function loadFaviconCache() {
+  if (_faviconCache !== null) return;
+  try {
+    const { favicons = {} } = await chrome.storage.local.get('favicons');
+    _faviconCache = favicons;
+  } catch {
+    _faviconCache = {};
+  }
+}
+
+/**
+ * cacheFavicons(tabs)
+ * Takes the favIconUrl from Chrome's tab API and stores it locally.
+ * Fetches go through the background service worker to avoid CORS restrictions.
+ */
+async function cacheFavicons(tabs) {
+  await loadFaviconCache();
+  const updates = {};
+  let changed = false;
+
+  for (const tab of tabs) {
+    if (!tab.url) continue;
+    let domain;
+    let faviconUrl = tab.favIconUrl || '';
+    try {
+      const parsed = new URL(tab.url);
+      domain = parsed.hostname;
+      // Fallback: if Chrome didn't provide favIconUrl, try the common /favicon.ico path
+      if (!faviconUrl && domain && !domain.startsWith('chrome')) {
+        faviconUrl = `${parsed.protocol}//${domain}/favicon.ico`;
+      }
+    } catch { continue; }
+    if (!domain || !faviconUrl || _faviconCache[domain]) continue;
+
+    // Fetch via background service worker (avoids CORS in chrome-extension:// pages)
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: 'fetch-favicon', url: faviconUrl });
+      if (!resp || !resp.ok) continue;
+      _faviconCache[domain] = resp.dataUrl;
+      updates[domain] = resp.dataUrl;
+      changed = true;
+    } catch { /* skip failed fetches */ }
+  }
+
+  if (changed) {
+    await chrome.storage.local.set({ favicons: { ..._faviconCache, ...updates } });
+  }
+}
+
+/**
+ * getFavicon(domain)
+ * Returns a local data URL if cached, otherwise an empty string.
+ */
+function getFavicon(domain) {
+  if (!domain || _faviconCache === null) return '';
+  return _faviconCache[domain] || '';
+}
+
 function stripTitleNoise(title) {
   if (!title) return '';
   // Strip leading notification count: "(2) Title"
@@ -784,7 +854,7 @@ function buildOverflowChips(hiddenTabs, urlCounts = {}) {
     const safeLabel = escapeHTML(label);
     let domain = '';
     try { domain = new URL(tab.url).hostname; } catch {}
-    const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=16` : '';
+    const faviconUrl = getFavicon(domain);
     return `<div class="page-chip clickable${chipClass}" data-action="focus-tab" data-tab-url="${safeUrl}" title="${safeTitle}">
       ${faviconUrl ? `<img class="chip-favicon" src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
       <span class="chip-text">${safeLabel}</span>${dupeTag}
@@ -866,7 +936,7 @@ function renderDomainCard(group) {
     const safeLabel = escapeHTML(label);
     let domain = '';
     try { domain = new URL(tab.url).hostname; } catch {}
-    const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=16` : '';
+    const faviconUrl = getFavicon(domain);
     return `<div class="page-chip clickable${chipClass}" data-action="focus-tab" data-tab-url="${safeUrl}" title="${safeTitle}">
       ${faviconUrl ? `<img class="chip-favicon" src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
       <span class="chip-text">${safeLabel}</span>${dupeTag}
@@ -983,8 +1053,16 @@ async function renderDeferredColumn() {
  */
 function renderDeferredItem(item) {
   let domain = '';
-  try { domain = new URL(item.url).hostname.replace(/^www\./, ''); } catch {}
-  const faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=16`;
+  let faviconUrl = '';
+  try {
+    const parsed = new URL(item.url);
+    domain = parsed.hostname;
+    faviconUrl = getFavicon(domain);
+    // Fallback: if not in cache, try the common /favicon.ico path
+    if (!faviconUrl && domain && !domain.startsWith('chrome')) {
+      faviconUrl = `${parsed.protocol}//${domain}/favicon.ico`;
+    }
+  } catch {}
   const ago = timeAgo(item.savedAt);
 
   return `

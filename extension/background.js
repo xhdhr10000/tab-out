@@ -91,3 +91,55 @@ chrome.tabs.onUpdated.addListener(() => {
 
 // Run once immediately when the service worker first loads
 updateBadge();
+
+// ─── Favicon Proxy ──────────────────────────────────────────────────────────
+// The chrome-extension:// new tab page is blocked by CORS when fetching
+// external favicons. The background service worker has no such restriction,
+// so we proxy favicon fetches through it.
+
+function readBlobAsDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function fetchFavicon(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) return null;
+  const blob = await resp.blob();
+  if (blob.size > 20480) return null; // skip oversized icons (>20KB)
+  return await readBlobAsDataUrl(blob);
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type !== 'fetch-favicon') return;
+  (async () => {
+    try {
+      // Try primary URL first
+      let dataUrl = await fetchFavicon(msg.url);
+
+      // Fallback: try common alternative paths
+      if (!dataUrl) {
+        const url = new URL(msg.url);
+        const fallbacks = ['/favicon.png', '/apple-touch-icon.png', '/apple-touch-icon-precomposed.png'];
+        for (const path of fallbacks) {
+          dataUrl = await fetchFavicon(`${url.protocol}//${url.host}${path}`);
+          if (dataUrl) break;
+        }
+      }
+
+      if (dataUrl) {
+        sendResponse({ ok: true, dataUrl });
+      } else {
+        sendResponse({ ok: false });
+      }
+    } catch {
+      sendResponse({ ok: false });
+    }
+  })();
+  return true; // keep the message channel open for async sendResponse
+});
+
