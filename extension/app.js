@@ -1573,6 +1573,34 @@ document.addEventListener('input', async (e) => {
 
 
 /* ----------------------------------------------------------------
+   THEME TOGGLE — dark mode with system preference detection
+   ---------------------------------------------------------------- */
+
+(async function initTheme() {
+  const root = document.documentElement;
+  const { theme } = await chrome.storage.local.get('theme');
+
+  // Apply saved preference, or fall back to system preference
+  if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+    root.classList.add('dark');
+  }
+
+  // Toggle button
+  document.getElementById('themeToggle')?.addEventListener('click', async () => {
+    const isDark = root.classList.toggle('dark');
+    await chrome.storage.local.set({ theme: isDark ? 'dark' : 'light' });
+  });
+
+  // Listen for system preference changes
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', async (e) => {
+    // Only auto-switch if user hasn't manually set a preference
+    const { theme: saved } = await chrome.storage.local.get('theme');
+    if (saved) return; // user has a manual preference, don't override
+    root.classList.toggle('dark', e.matches);
+  });
+})();
+
+/* ----------------------------------------------------------------
    INITIALIZE
    ---------------------------------------------------------------- */
 renderDashboard();

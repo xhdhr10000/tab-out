@@ -20,6 +20,23 @@
   --shadow: rgba(26, 22, 19, 0.06);
 }
 
+/* Dark mode variables — used when .dark class is on <html> */
+html.dark {
+  --ink: #e8e2da;
+  --paper: #1a1a1f;
+  --warm-gray: #2a2a30;
+  --muted: #8a8690;
+  --accent-amber: #e8944a;
+  --accent-sage: #7aaa82;
+  --accent-slate: #7a8b9a;
+  --accent-rose: #d37a7a;
+  --status-active: #5daa6a;
+  --status-cooling: #d8a94e;
+  --status-abandoned: #d37a7a;
+  --card-bg: #222228;
+  --shadow: rgba(0, 0, 0, 0.3);
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
@@ -80,6 +97,35 @@ header {
   letter-spacing: 0.5px;
   text-transform: uppercase;
 }
+
+/* ---- Theme toggle button ---- */
+.theme-toggle {
+  background: none;
+  border: 1px solid var(--warm-gray);
+  border-radius: 8px;
+  padding: 8px;
+  cursor: pointer;
+  color: var(--muted);
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.theme-toggle:hover {
+  color: var(--ink);
+  border-color: var(--muted);
+  background: var(--warm-gray);
+}
+.theme-toggle svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+.theme-toggle .icon-sun { display: none; }
+.theme-toggle .icon-moon { display: block; }
+html.dark .theme-toggle .icon-sun { display: block; }
+html.dark .theme-toggle .icon-moon { display: none; }
 
 /* ---- Tab cleanup banner ---- */
 .tab-cleanup-banner {
