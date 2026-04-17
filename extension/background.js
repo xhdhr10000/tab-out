@@ -114,6 +114,23 @@ async function fetchFavicon(url) {
   return await readBlobAsDataUrl(blob);
 }
 
+// ─── Bookmarks Handler ──────────────────────────────────────────────────────
+// New tab page cannot access chrome.bookmarks directly, so we proxy through background
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'get-bookmarks') {
+    (async () => {
+      try {
+        const tree = await chrome.bookmarks.getTree();
+        sendResponse({ ok: true, tree });
+      } catch (err) {
+        sendResponse({ ok: false, error: err.message });
+      }
+    })();
+    return true; // keep channel open for async response
+  }
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type !== 'fetch-favicon') return;
   (async () => {

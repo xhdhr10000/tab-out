@@ -1601,6 +1601,122 @@ document.addEventListener('input', async (e) => {
 })();
 
 /* ----------------------------------------------------------------
+   BOOKMARKS BAR — Toggle visibility and render bookmarks
+   ---------------------------------------------------------------- */
+
+/**
+ * renderBookmarks()
+ *
+ * Fetches Chrome bookmarks and renders them in the bookmarks bar.
+ * Only shows bookmarks from the "Bookmarks Bar" folder.
+ */
+async function renderBookmarks() {
+  const container = document.getElementById('bookmarksContainer');
+  if (!container) return;
+
+  try {
+    // Fetch bookmarks via background script (new tab page can't access chrome.bookmarks directly)
+    const response = await chrome.runtime.sendMessage({ type: 'get-bookmarks' });
+    if (!response || !response.ok) {
+      container.innerHTML = '<span class="bookmarks-empty">Unable to load bookmarks</span>';
+      return;
+    }
+    const tree = response.tree;
+    
+    // Find the bookmarks bar folder (id: "1" is the bookmarks bar in Chrome)
+    const bookmarksBar = tree[0]?.children?.find(child => child.id === '1');
+    
+    if (!bookmarksBar || !bookmarksBar.children || bookmarksBar.children.length === 0) {
+      container.innerHTML = '<span class="bookmarks-empty">No bookmarks in your bookmarks bar</span>';
+      return;
+    }
+
+    // Ensure favicon cache is loaded
+    await loadFaviconCache();
+    
+    // Fetch favicons for bookmark domains that aren't cached yet
+    const bookmarkTabs = bookmarksBar.children
+      .filter(i => !i.children && i.url)
+      .map(i => ({ url: i.url, favIconUrl: '' }));
+    if (bookmarkTabs.length > 0) {
+      await cacheFavicons(bookmarkTabs);
+    }
+    
+    // Render each bookmark with favicon
+    container.innerHTML = bookmarksBar.children.map(item => {
+      if (item.children) {
+        // It's a folder
+        return `<button class="bookmark-item bookmark-folder" data-folder-id="${item.id}" title="${escapeHTML(item.title)}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+          ${escapeHTML(item.title)}
+        </button>`;
+      }
+      const domain = new URL(item.url).hostname;
+      const favicon = getFavicon(domain);
+      if (favicon) {
+        return `<a class="bookmark-item" href="${escapeHTML(item.url)}" title="${escapeHTML(item.title)}">
+          <img class="bookmark-favicon" src="${favicon}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'bookmark-favicon-svg'}))">
+          ${escapeHTML(item.title)}
+        </a>`;
+      }
+      return `<a class="bookmark-item" href="${escapeHTML(item.url)}" title="${escapeHTML(item.title)}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+        </svg>
+        ${escapeHTML(item.title)}
+      </a>`;
+    }).join('');
+  } catch (err) {
+    console.warn('[tab-out] Failed to load bookmarks:', err);
+    container.innerHTML = '<span class="bookmarks-empty">Unable to load bookmarks</span>';
+  }
+}
+
+/**
+ * initBookmarksBar()
+ *
+ * Initializes the bookmarks bar toggle functionality.
+ * Default state: visible (enabled).
+ */
+async function initBookmarksBar() {
+  const toggle = document.getElementById('bookmarksToggle');
+  const bar = document.getElementById('bookmarksBar');
+  
+  if (!toggle || !bar) return;
+
+  // Load saved preference (default: true = visible)
+  const { bookmarksBarVisible } = await chrome.storage.local.get('bookmarksBarVisible');
+  const isVisible = bookmarksBarVisible !== false; // default true
+
+  // Apply initial state
+  if (isVisible) {
+    bar.style.display = 'flex';
+    toggle.classList.add('active');
+    await renderBookmarks();
+  }
+
+  // Toggle click handler
+  toggle.addEventListener('click', async () => {
+    const nowVisible = bar.style.display === 'none';
+    
+    if (nowVisible) {
+      bar.style.display = 'flex';
+      toggle.classList.add('active');
+      await renderBookmarks();
+    } else {
+      bar.style.display = 'none';
+      toggle.classList.remove('active');
+    }
+    
+    // Save preference
+    await chrome.storage.local.set({ bookmarksBarVisible: nowVisible });
+  });
+}
+
+/* ----------------------------------------------------------------
    INITIALIZE
    ---------------------------------------------------------------- */
+initBookmarksBar();
 renderDashboard();
